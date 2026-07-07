@@ -4,8 +4,9 @@ project(rgb565-rle VERSION 1.0.0 LANGUAGES C)
 # ---------------------------------------------------------------------------
 # Options
 # ---------------------------------------------------------------------------
-option(RGB565_RLE_BUILD_EXAMPLES "Build example programs" ON)
-option(RGB565_RLE_BUILD_TESTS    "Build test suite"      ON)
+option(RGB565_RLE_BUILD_EXAMPLES "Build example programs"      ON)
+option(RGB565_RLE_BUILD_TESTS    "Build test suite"           ON)
+option(RGB565_RLE_BUILD_TOOLS    "Build conversion tools"     ON)
 
 # ---------------------------------------------------------------------------
 # Library target
@@ -51,4 +52,8 @@ endif()
 if(RGB565_RLE_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+if(RGB565_RLE_BUILD_TOOLS)
+    add_subdirectory(tools)
 endif()
