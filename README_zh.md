@@ -55,6 +55,7 @@ ctest --output-on-failure
 |---|---|---|
 | `RGB565_RLE_BUILD_EXAMPLES` | ON | 构建示例程序 |
 | `RGB565_RLE_BUILD_TESTS` | ON | 构建测试套件 |
+| `RGB565_RLE_BUILD_TOOLS` | ON | 构建转换工具 (`img2rle`, `video2rle`) |
 
 ### 集成到你的项目
 
@@ -86,6 +87,40 @@ size_t comp_size = rgb565_rle_compress(pixels, 5, compressed, max_size);
 // 解压
 uint16_t restored[5];
 size_t count = rgb565_rle_decompress(compressed, comp_size, restored, 5);
+```
+
+## 工具
+
+项目附带转换工具，可将图片和视频转换为 RLE 压缩的 C 头文件或二进制文件。
+
+### img2rle — 图片转 RLE
+
+将 PNG、JPEG、BMP 等常见图片格式转换为 RGB565 RLE。
+
+```bash
+# 输出 C 头文件（默认）
+./tools/img2rle input.png -o image.h
+
+# 输出二进制文件
+./tools/img2rle input.png -t bin -o image.bin
+
+# 转换时缩放
+./tools/img2rle input.png -w 64 -h 64 -n my_sprite -o sprite.h
+```
+
+### video2rle — 视频/帧序列转 RLE
+
+将图片序列或原始 RGB565 帧转换为逐帧 RLE 压缩输出。
+
+```bash
+# 图片序列模式
+./tools/video2rle frame_0001.png frame_0002.png frame_0003.png -o video.h
+
+# 二进制容器输出
+./tools/video2rle frame_*.png -t bin -o video.bin
+
+# 原始 RGB565 帧
+./tools/video2rle --raw frames.bin -w 320 -h 240 -o video.h
 ```
 
 ## 许可证

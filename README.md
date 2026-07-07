@@ -53,6 +53,7 @@ ctest --output-on-failure
 |---|---|---|
 | `RGB565_RLE_BUILD_EXAMPLES` | ON | Build example programs |
 | `RGB565_RLE_BUILD_TESTS` | ON | Build test suite |
+| `RGB565_RLE_BUILD_TOOLS` | ON | Build conversion tools (`img2rle`, `video2rle`) |
 
 ### Integrating into Your Project
 
@@ -84,6 +85,40 @@ size_t comp_size = rgb565_rle_compress(pixels, 5, compressed, max_size);
 // Decompress
 uint16_t restored[5];
 size_t count = rgb565_rle_decompress(compressed, comp_size, restored, 5);
+```
+
+## Tools
+
+The project includes conversion tools that turn images and videos into RLE-compressed C headers or binary files.
+
+### img2rle — Image to RLE
+
+Converts PNG, JPEG, BMP, and other common image formats to RGB565 RLE.
+
+```bash
+# C header output (default)
+./tools/img2rle input.png -o image.h
+
+# Binary output
+./tools/img2rle input.png -t bin -o image.bin
+
+# Resize during conversion
+./tools/img2rle input.png -w 64 -h 64 -n my_sprite -o sprite.h
+```
+
+### video2rle — Video / Frame Sequence to RLE
+
+Converts image sequences or raw RGB565 frames into per-frame RLE-compressed output.
+
+```bash
+# Image sequence mode
+./tools/video2rle frame_0001.png frame_0002.png frame_0003.png -o video.h
+
+# Binary container output
+./tools/video2rle frame_*.png -t bin -o video.bin
+
+# Raw RGB565 frames
+./tools/video2rle --raw frames.bin -w 320 -h 240 -o video.h
 ```
 
 ## License
