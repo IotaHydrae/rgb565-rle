@@ -4,9 +4,9 @@ project(rgb565-rle VERSION 1.0.0 LANGUAGES C)
 # ---------------------------------------------------------------------------
 # Options
 # ---------------------------------------------------------------------------
-option(RGB565_RLE_BUILD_EXAMPLES "Build example programs"      ON)
-option(RGB565_RLE_BUILD_TESTS    "Build test suite"           ON)
-option(RGB565_RLE_BUILD_TOOLS    "Build conversion tools"     ON)
+option(RGB565_RLE_BUILD_EXAMPLES "Build example programs"     OFF)
+option(RGB565_RLE_BUILD_TESTS    "Build test suite"           OFF)
+option(RGB565_RLE_BUILD_TOOLS    "Build conversion tools"     OFF)
 
 # ---------------------------------------------------------------------------
 # Library target
