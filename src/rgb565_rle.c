@@ -270,3 +270,274 @@ size_t rgb565_rle_decompress(const uint8_t *input,
 
     return pixel_count;
 }
+
+size_t rgb565_rle_decompress_callback(const uint8_t *input,
+                                      size_t input_size,
+                                      uint16_t width,
+                                      uint16_t *buf_a,
+                                      uint16_t *buf_b,
+                                      size_t buf_capacity,
+                                      rgb565_rle_callback callback,
+                                      void *user_data)
+{
+    uint32_t  total_pixels;
+    size_t    pixel_count;   /* number of pixels emitted so far */
+    size_t    pos;           /* read position in input[] */
+    uint16_t  x;             /* current column within the image */
+    uint16_t  y;             /* current row within the image */
+    size_t    acc_count;     /* pixels accumulated in active buf */
+    uint16_t  acc_x;         /* starting column of current batch */
+    uint16_t  acc_y;         /* row of current batch */
+    uint16_t *buf;           /* active buffer (buf_a, or toggles) */
+
+    /* --- parameter validation --- */
+    if ((input == NULL) || (callback == NULL) || (buf_a == NULL) ||
+        (input_size < HEADER_SIZE) || (width == 0u) || (buf_capacity == 0u)) {
+        return 0u;
+    }
+
+    /* --- read header --- */
+    total_pixels = read_u32_le(input);
+
+    if (total_pixels == 0u) {
+        return 0u;  /* empty image is not meaningful */
+    }
+
+    pixel_count = 0u;
+    pos         = HEADER_SIZE;
+    x           = 0u;
+    y           = 0u;
+    acc_count   = 0u;
+    acc_x       = 0u;
+    acc_y       = 0u;
+    buf         = buf_a;
+
+    /*
+     * Helper macro: flush accumulated pixels to the callback.
+     * Computes the bounding rectangle which may span multiple rows.
+     * When buf_b is non-NULL the active buffer toggles (ping-pong).
+     */
+#define FLUSH()                                                      \
+    do {                                                             \
+        uint32_t lp;                                                 \
+        lp = (uint32_t)acc_y * width + acc_x + acc_count - 1u;      \
+        callback(buf, acc_count, acc_x, acc_y,                       \
+                 (uint16_t)(lp % width), (uint16_t)(lp / width),     \
+                 user_data);                                         \
+        acc_count = 0u;                                              \
+        acc_x     = x;                                               \
+        acc_y     = y;                                               \
+        if (buf_b != NULL) {                                         \
+            buf = (buf == buf_a) ? buf_b : buf_a;                    \
+        }                                                            \
+    } while (0)
+
+    /* --- decompress --- */
+    while (pos < input_size) {
+        uint8_t  ctl;
+        uint8_t  run_type;
+        size_t   run_len;
+        size_t   remaining;
+
+        if (pixel_count >= total_pixels) {
+            break;
+        }
+
+        ctl      = input[pos++];
+        run_type = ctl & CTL_REPEAT;
+        run_len  = ((size_t)(ctl & CTL_LENGTH)) + 1u;
+
+        if (run_type == CTL_REPEAT) {
+            /* --- repeat run — expand directly into caller's buf --- */
+            uint16_t pixel_val;
+            size_t   i;
+
+            if (pos + 2u > input_size) {
+                return 0u;  /* truncated input */
+            }
+
+            if (pixel_count + run_len > total_pixels) {
+                return 0u;  /* would exceed declared pixel count */
+            }
+
+            pixel_val = read_pixel_le(&input[pos]);
+            pos += 2;
+
+            /*
+             * Fast path: entire run fits in the current row AND in
+             * the remaining buffer space.  Skip the chunk loop.
+             */
+            if ((x + run_len <= width) &&
+                (acc_count + run_len <= buf_capacity)) {
+
+                if (acc_count == 0u) {
+                    acc_x = x;
+                    acc_y = y;
+                }
+
+                for (i = 0u; i < run_len; i++) {
+                    buf[acc_count + i] = pixel_val;
+                }
+
+                acc_count += run_len;
+                x = (uint16_t)(x + run_len);
+
+                if (x >= width) {
+                    x = 0u;
+                    y++;
+                }
+
+                if (acc_count >= buf_capacity) {
+                    FLUSH();
+                }
+            } else {
+                /* slow path — chunk at row / buffer boundaries */
+                remaining = run_len;
+                while (remaining > 0u) {
+                    uint16_t space_in_row;
+                    size_t   space_in_buf;
+                    size_t   chunk;
+
+                    space_in_row = (uint16_t)(width - x);
+                    space_in_buf = buf_capacity - acc_count;
+
+                    chunk = remaining;
+                    if ((size_t)space_in_row < chunk) {
+                        chunk = (size_t)space_in_row;
+                    }
+                    if (space_in_buf < chunk) {
+                        chunk = space_in_buf;
+                    }
+
+                    if (acc_count == 0u) {
+                        acc_x = x;
+                        acc_y = y;
+                    }
+
+                    for (i = 0u; i < chunk; i++) {
+                        buf[acc_count + i] = pixel_val;
+                    }
+
+                    acc_count  += chunk;
+                    remaining  -= chunk;
+                    x = (uint16_t)(x + chunk);
+
+                    if (x >= width) {
+                        x = 0u;
+                        y++;
+                    }
+
+                    if (acc_count >= buf_capacity) {
+                        FLUSH();
+                    }
+                }
+            }
+        } else {
+            /* --- literal run — read directly into caller's buf --- */
+            size_t i;
+
+            if (pos + run_len * 2u > input_size) {
+                return 0u;  /* truncated input */
+            }
+
+            if (pixel_count + run_len > total_pixels) {
+                return 0u;  /* would exceed declared pixel count */
+            }
+
+            /*
+             * Fast path: entire run fits in the current row AND in
+             * the remaining buffer space.  Skip the chunk loop.
+             */
+            if ((x + run_len <= width) &&
+                (acc_count + run_len <= buf_capacity)) {
+
+                if (acc_count == 0u) {
+                    acc_x = x;
+                    acc_y = y;
+                }
+
+                for (i = 0u; i < run_len; i++) {
+                    buf[acc_count + i] = read_pixel_le(&input[pos]);
+                    pos += 2;
+                }
+
+                acc_count += run_len;
+                x = (uint16_t)(x + run_len);
+
+                if (x >= width) {
+                    x = 0u;
+                    y++;
+                }
+
+                if (acc_count >= buf_capacity) {
+                    FLUSH();
+                }
+            } else {
+                /* slow path — chunk at row / buffer boundaries */
+                remaining = run_len;
+                while (remaining > 0u) {
+                    uint16_t space_in_row;
+                    size_t   space_in_buf;
+                    size_t   chunk;
+
+                    space_in_row = (uint16_t)(width - x);
+                    space_in_buf = buf_capacity - acc_count;
+
+                    chunk = remaining;
+                    if ((size_t)space_in_row < chunk) {
+                        chunk = (size_t)space_in_row;
+                    }
+                    if (space_in_buf < chunk) {
+                        chunk = space_in_buf;
+                    }
+
+                    if (acc_count == 0u) {
+                        acc_x = x;
+                        acc_y = y;
+                    }
+
+                    for (i = 0u; i < chunk; i++) {
+                        buf[acc_count + i] = read_pixel_le(&input[pos]);
+                        pos += 2;
+                    }
+
+                    acc_count  += chunk;
+                    remaining  -= chunk;
+                    x = (uint16_t)(x + chunk);
+
+                    if (x >= width) {
+                        x = 0u;
+                        y++;
+                    }
+
+                    if (acc_count >= buf_capacity) {
+                        FLUSH();
+                    }
+                }
+            }
+        }
+
+        pixel_count += run_len;
+    }
+
+    /* --- final flush --- */
+    if (acc_count > 0u) {
+        uint32_t last_pos;
+
+        last_pos = (uint32_t)acc_y * width
+                 + acc_x + acc_count - 1u;
+        callback(buf, acc_count, acc_x, acc_y,
+                 (uint16_t)(last_pos % width),
+                 (uint16_t)(last_pos / width),
+                 user_data);
+    }
+
+#undef FLUSH
+
+    /* --- verify we emitted exactly the declared number of pixels --- */
+    if (pixel_count != total_pixels) {
+        return 0u;  /* truncated stream */
+    }
+
+    return pixel_count;
+}
