@@ -1,11 +1,18 @@
 /*
  * RGB565 RLE Compression Library — Implementation
  *
- * Platform-independent.  Uses only <stddef.h> and <stdint.h>.
- * No dynamic allocation, no libc calls, no platform-specific APIs.
+ * Platform-independent.  Uses only <stddef.h>, <stdint.h> and <string.h>
+ * (memcpy with a constant size, which the compiler inlines into plain
+ * loads and stores).  No dynamic allocation, no platform-specific APIs.
  *
  * SPDX-License-Identifier: MIT
+ *
+ * The run bodies are filled and copied several pixels at a time instead of
+ * one 16-bit store per pixel; see fill_pixels() and copy_pixels() below. The
+ * decoded pixels, the flush points and the callback arguments are unchanged.
  */
+
+#include <string.h>
 
 #include "rgb565_rle.h"
 
@@ -39,6 +46,69 @@ static void write_pixel_le(uint8_t *dst, uint16_t pixel)
 static uint16_t read_pixel_le(const uint8_t *src)
 {
     return (uint16_t)src[0] | ((uint16_t)src[1] << 8);
+}
+
+/* --------------------------------------------------------------------------
+ * Helpers: write a run of pixels
+ *
+ * The run bodies are the hot path of the decoder, so they are written a few
+ * pixels at a time. A repeat run becomes 32-bit stores of a duplicated pixel,
+ * a literal run becomes a straight copy; both only ever touch the range the
+ * caller already bounded, so every flush still happens at exactly the same
+ * point as before. memcpy() with a constant size compiles to a load and a
+ * store, so no libc call survives.
+ * -------------------------------------------------------------------------- */
+
+#define RUN_CHUNK 4u
+
+static void fill_pixels(uint16_t *dst, uint16_t value, size_t count)
+{
+    uint32_t pair = (uint32_t)value | ((uint32_t)value << 16);
+
+    while (count >= RUN_CHUNK) {
+        memcpy(dst, &pair, sizeof(pair));
+        memcpy(dst + 2, &pair, sizeof(pair));
+        dst   += RUN_CHUNK;
+        count -= RUN_CHUNK;
+    }
+    while (count >= 2u) {
+        memcpy(dst, &pair, sizeof(pair));
+        dst   += 2;
+        count -= 2u;
+    }
+    if (count != 0u) {
+        *dst = value;
+    }
+}
+
+static void copy_pixels(uint16_t *dst, const uint8_t *src, size_t count)
+{
+#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && \
+    (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+    /* On a little-endian target the compressed bytes are already the pixel
+     * values, so the copy needs no byte swapping. */
+    while (count >= RUN_CHUNK) {
+        memcpy(dst, src, 8u);
+        dst   += RUN_CHUNK;
+        src   += 8u;
+        count -= RUN_CHUNK;
+    }
+    while (count >= 2u) {
+        memcpy(dst, src, 4u);
+        dst   += 2;
+        src   += 4u;
+        count -= 2u;
+    }
+    if (count != 0u) {
+        *dst = read_pixel_le(src);
+    }
+#else
+    size_t i;
+
+    for (i = 0u; i < count; i++) {
+        dst[i] = read_pixel_le(src + 2u * i);
+    }
+#endif
 }
 
 /* --------------------------------------------------------------------------
@@ -235,12 +305,7 @@ size_t rgb565_rle_decompress(const uint8_t *input,
                 return 0u;  /* would exceed declared pixel count */
             }
 
-            {
-                size_t i;
-                for (i = 0u; i < run_len; i++) {
-                    pixels[pixel_count + i] = pixel_val;
-                }
-            }
+            fill_pixels(&pixels[pixel_count], pixel_val, run_len);
             pixel_count += run_len;
         } else {
             /* --- literal run --- */
@@ -252,13 +317,8 @@ size_t rgb565_rle_decompress(const uint8_t *input,
                 return 0u;  /* would exceed declared pixel count */
             }
 
-            {
-                size_t i;
-                for (i = 0u; i < run_len; i++) {
-                    pixels[pixel_count + i] = read_pixel_le(&input[pos]);
-                    pos += 2;
-                }
-            }
+            copy_pixels(&pixels[pixel_count], &input[pos], run_len);
+            pos += run_len * 2u;
             pixel_count += run_len;
         }
     }
@@ -350,7 +410,6 @@ size_t rgb565_rle_decompress_callback(const uint8_t *input,
         if (run_type == CTL_REPEAT) {
             /* --- repeat run — expand directly into caller's buf --- */
             uint16_t pixel_val;
-            size_t   i;
 
             if (pos + 2u > input_size) {
                 return 0u;  /* truncated input */
@@ -375,9 +434,7 @@ size_t rgb565_rle_decompress_callback(const uint8_t *input,
                     acc_y = y;
                 }
 
-                for (i = 0u; i < run_len; i++) {
-                    buf[acc_count + i] = pixel_val;
-                }
+                fill_pixels(&buf[acc_count], pixel_val, run_len);
 
                 acc_count += run_len;
                 x = (uint16_t)(x + run_len);
@@ -414,9 +471,7 @@ size_t rgb565_rle_decompress_callback(const uint8_t *input,
                         acc_y = y;
                     }
 
-                    for (i = 0u; i < chunk; i++) {
-                        buf[acc_count + i] = pixel_val;
-                    }
+                    fill_pixels(&buf[acc_count], pixel_val, chunk);
 
                     acc_count  += chunk;
                     remaining  -= chunk;
@@ -434,8 +489,6 @@ size_t rgb565_rle_decompress_callback(const uint8_t *input,
             }
         } else {
             /* --- literal run — read directly into caller's buf --- */
-            size_t i;
-
             if (pos + run_len * 2u > input_size) {
                 return 0u;  /* truncated input */
             }
@@ -456,10 +509,8 @@ size_t rgb565_rle_decompress_callback(const uint8_t *input,
                     acc_y = y;
                 }
 
-                for (i = 0u; i < run_len; i++) {
-                    buf[acc_count + i] = read_pixel_le(&input[pos]);
-                    pos += 2;
-                }
+                copy_pixels(&buf[acc_count], &input[pos], run_len);
+                pos += run_len * 2u;
 
                 acc_count += run_len;
                 x = (uint16_t)(x + run_len);
@@ -496,10 +547,8 @@ size_t rgb565_rle_decompress_callback(const uint8_t *input,
                         acc_y = y;
                     }
 
-                    for (i = 0u; i < chunk; i++) {
-                        buf[acc_count + i] = read_pixel_le(&input[pos]);
-                        pos += 2;
-                    }
+                    copy_pixels(&buf[acc_count], &input[pos], chunk);
+                    pos += chunk * 2u;
 
                     acc_count  += chunk;
                     remaining  -= chunk;
